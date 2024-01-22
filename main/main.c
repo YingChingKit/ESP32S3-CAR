@@ -22,6 +22,7 @@ static const char __attribute__((unused)) *TAG = "app_main";
 
 static espnow_send_param_t espnow_send_param;
 static esp_connection_handle_t esp_connection_handle;
+int test = 123;
 
 void rssi_task()
 {
