@@ -99,7 +99,7 @@ void catapult_controller(catapult_controller_handle_t *handle, button_event_t *e
                         handle->wind_angle = catapult_controller_constrain(handle->wind_angle + 20, 0, 145);
                         handle->state = STATE_BASE_TURN;
                 }
-                        
+                int test = 123;        
                 //handle->turn_angle = catapult_controller_constrain(handle->turn_angle - 1, 50, 120);
                 //handle->laser_duty_cycle = catapult_controller_constrain(handle->laser_duty_cycle - 1, 0, 100);
                 // handle->turn_angle = CATAPULT_TILT_RIGHT_ANGLE;
