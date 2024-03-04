@@ -4,6 +4,7 @@
 #include "servo.h"
 #include "button.h"
 #include "pindef.h"
+#include "mathop.h"
 #include "laser.h"
 
 #define CATAPULT_TURN_DEFAULT_ANGLE (90)
@@ -13,7 +14,6 @@
 #define CATAPULT_LASER_DEFAULT_ANGLE (0)
 #define CATAPULT_TURN_ANGLE_OFFSET (-40.0F)
 #define CATAPULT_RESET_TIMEOUT_US (1 * 1e6)
-
 #define CATAPULT_TILT_LEFT_ANGLE (50)
 #define CATAPULT_TILT_RIGHT_ANGLE (130)
 
