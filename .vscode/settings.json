@@ -48,10 +48,10 @@
     "connection.h": "c",
     "bitset": "c",
     "ws2812.h": "c",
-    "mathop.h": "c",
-    "servo.h": "c",
-    "button.h": "c",
-    "logging.h": "c"
+    "nvs_flash.h": "c",
+    "logging.h": "c",
+    "esp_now.h": "c",
+    "device_settings.h": "c"
   },
   "idf.port": "/dev/ttyACM0",
   "cSpell.words": [
@@ -59,6 +59,7 @@
     "cmpr",
     "containerof",
     "deadtime",
+    "eeprom",
     "ESPNOW",
     "Espressif",
     "gpio",

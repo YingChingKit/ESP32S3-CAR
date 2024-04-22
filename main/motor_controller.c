@@ -84,6 +84,10 @@ motor_controller_handle_t *motor_controller_default_config(motor_controller_hand
         static pid_handle_t left_motor_pid_handle, right_motor_pid_handle;
         pid_init(&left_motor_pid_handle, 0.01, 0.07, 0.14, 0.007, 0.3);
         pid_init(&right_motor_pid_handle, 0.01, 0.07, 0.13, 0.005, 0.3);
+#if (CAR_USE_PID_CONTROL == true)
+        pid_init(&left_motor_pid_handle, 0.01, LEFT_MOTOR_P_TERM, LEFT_MOTOR_I_TERM, LEFT_MOTOR_D_TERM, 0.3);
+        pid_init(&right_motor_pid_handle, 0.01, RIGHT_MOTOR_P_TERM, RIGHT_MOTOR_I_TERM, RIGHT_MOTOR_D_TERM, 0.3);
+#endif
         pid_set_output_range(&left_motor_pid_handle, -100, 100);
         pid_set_output_range(&right_motor_pid_handle, -100, 100);
 
@@ -234,16 +238,24 @@ void update_motors(motor_controller_handle_t *handle)
                 dc_motor_set_duty(handle->right_motor_handle, motor_stat.right_motor.duty_cycle);
                 break;
         default:
-                dc_motor_coast(handle->left_motor_handle);
-                dc_motor_coast(handle->right_motor_handle);
+                if (MOTOR_BRAKE_ON_IDLE)
+                {
+                        dc_motor_brake(handle->left_motor_handle);
+                        dc_motor_brake(handle->right_motor_handle);
+                }
+                else
+                {
+                        dc_motor_coast(handle->left_motor_handle);
+                        dc_motor_coast(handle->right_motor_handle);
+                }
                 break;
         }
 }
 
 void motor_controller_openloop(motor_controller_handle_t *handle, button_event_t *event)
 {
-        motor_stat.left_motor.duty_cycle = 50;
-        motor_stat.right_motor.duty_cycle = 50;
+        motor_stat.left_motor.duty_cycle = LEFT_MOTOR_POWER;
+        motor_stat.right_motor.duty_cycle = RIGHT_MOTOR_POWER;
         update_motors(handle);
         read_buttons(handle, event);
 }
