@@ -250,8 +250,8 @@ void motor_controller_openloop(motor_controller_handle_t *handle, button_event_t
 
 void motor_controller_stop_all(motor_controller_handle_t *handle)
 {
-        dc_motor_brake(handle->left_motor_handle);
-        dc_motor_brake(handle->right_motor_handle);
+        dc_motor_coast(handle->left_motor_handle);
+        dc_motor_coast(handle->right_motor_handle);
 }
 
 motor_group_stat_pkt_t *motor_controller_get_stat(void)
