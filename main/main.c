@@ -13,6 +13,7 @@
 #include "pindef.h"
 #include "motor_controller.h"
 #include "catapult_controller.h"
+#include "goalkeeper_controller.h"
 #include "ws2812.h"
 #include "rssi.h"
 #include "logging.h"
@@ -167,6 +168,10 @@ void app_main(void)
         catapult_controller_default_config(&catapult_controller_handle);
         catapult_controller_init(&catapult_controller_handle);
 
+        goalkeeper_controller_handle_t goalkeeper_controller_handle;
+        goalkeeper_controller_default_config(&goalkeeper_controller_handle);
+        goalkeeper_controller_init(&goalkeeper_controller_handle);
+
         xTaskCreate(rssi_task, "rssi_task", 4096, NULL, 4, NULL);
         xTaskCreate(ping_task, "ping_task", 4096, NULL, 4, NULL);
         xTaskCreate(info_task, "info_task", 4096, NULL, 4, NULL);
@@ -234,6 +239,7 @@ void app_main(void)
                         motor_controller(&motor_controller_handle, &remote_button_event);
                         // motor_controller_openloop(&motor_controller_handle, &remote_button_event);
                         catapult_controller(&catapult_controller_handle, &remote_button_event);
+                        // goalkeeper_controller(&goalkeeper_controller_handle, &remote_button_event);
                 }
                 esp_connection_handle_update(&esp_connection_handle);
                 heap_caps_check_integrity_all(true);

@@ -1,9 +1,10 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.portWin": "COM12",
+  "idf.portWin": "COM5",
   "idf.adapterTargetName": "esp32s3",
   "idf.openOcdConfigs": [
-    "board/esp32s3-builtin.cfg"
+    "interface/ftdi/esp32_devkitj_v1.cfg",
+    "target/esp32s3.cfg"
   ],
   "idf.flashType": "UART",
   "files.associations": {
@@ -46,7 +47,11 @@
     "pindef.h": "c",
     "connection.h": "c",
     "bitset": "c",
-    "ws2812.h": "c"
+    "ws2812.h": "c",
+    "mathop.h": "c",
+    "servo.h": "c",
+    "button.h": "c",
+    "logging.h": "c"
   },
   "idf.port": "/dev/ttyACM0",
   "cSpell.words": [
@@ -89,5 +94,6 @@
     "rssi",
     "setpoint"
   ],
-  "cmake.configureOnOpen": false
+  "cmake.configureOnOpen": false,
+  "C_Cpp.errorSquiggles": "disabled"
 }
