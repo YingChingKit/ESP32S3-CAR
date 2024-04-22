@@ -19,7 +19,7 @@ catapult_controller_handle_t *catapult_controller_default_config(catapult_contro
         handle->catapult_shot_time = 0;
         handle->wind_angle = CATAPULT_WIND_DEFAULT_ANGLE;
         handle->laser_angle = CATAPULT_LASER_DEFAULT_ANGLE;
-        handle->laser_duty_cycle = 1;
+        handle->laser_duty_cycle = 100;
 
         return handle;
 }
