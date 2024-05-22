@@ -1,14 +1,15 @@
 
 #include "motor_controller.h"
 
-static const char *TAG = "motor_controller";
+static const char *TAG = "motor_controller_closeloop";
 
 static motor_group_stat_pkt_t motor_stat;
 const int speed_reference = 10;
 const float rampup_initial = 0.6, rampup_delta = 0.005;
 static float rampup = 0;
+static bool control_mode_swap_axis = false;
 
-bool is_motor_control_pins(gpio_num_t pin)
+bool is_motor_control_buttons(gpio_num_t pin)
 {
         switch (pin)
         {
@@ -16,6 +17,7 @@ bool is_motor_control_pins(gpio_num_t pin)
         case GPIO_BUTTON_DOWN:
         case GPIO_BUTTON_LEFT:
         case GPIO_BUTTON_RIGHT:
+        case GPIO_BUTTON_TOGGLE_CONTROL:
                 return true;
         default:
                 return false;
@@ -84,6 +86,10 @@ motor_controller_handle_t *motor_controller_default_config(motor_controller_hand
         static pid_handle_t left_motor_pid_handle, right_motor_pid_handle;
         pid_init(&left_motor_pid_handle, 0.01, 0.07, 0.14, 0.007, 0.3);
         pid_init(&right_motor_pid_handle, 0.01, 0.07, 0.13, 0.005, 0.3);
+#if (CAR_USE_PID_CONTROL == true)
+        pid_init(&left_motor_pid_handle, 0.01, LEFT_MOTOR_P_TERM, LEFT_MOTOR_I_TERM, LEFT_MOTOR_D_TERM, 0.3);
+        pid_init(&right_motor_pid_handle, 0.01, RIGHT_MOTOR_P_TERM, RIGHT_MOTOR_I_TERM, RIGHT_MOTOR_D_TERM, 0.3);
+#endif
         pid_set_output_range(&left_motor_pid_handle, -100, 100);
         pid_set_output_range(&right_motor_pid_handle, -100, 100);
 
@@ -116,7 +122,7 @@ motor_controller_handle_t *motor_controller_init(motor_controller_handle_t *hand
         return handle;
 }
 
-void motor_controller_set_direction(motor_controller_handle_t *handle, direction_t direction)
+void motor_controller_set_direction(motor_controller_handle_t *handle, motor_tank_direction_t direction)
 {
         LOG_INFO("direction set [%s ---> %s]", DIRECTION_STRING[handle->direction], DIRECTION_STRING[direction]);
         handle->direction = direction;
@@ -131,7 +137,7 @@ void motor_controller_set_direction(motor_controller_handle_t *handle, direction
         ringbuffer_clear(handle->right_acceleration_rb_handle);
 }
 
-void motor_controller(motor_controller_handle_t *handle, button_event_t *event)
+void motor_controller_closeloop(motor_controller_handle_t *handle, button_event_t *event)
 {
         update_feedback(handle);
         update_pid(handle);
@@ -162,11 +168,31 @@ void update_pid(motor_controller_handle_t *handle)
         (rampup >= 1) ? (rampup = 1) : (rampup += rampup_delta);
 }
 
+gpio_num_t translate_button_pin_by_mode(gpio_num_t old, bool control_mode_swap_axis)
+{
+        if (!control_mode_swap_axis)
+                return old;
+
+        switch (old)
+        {
+        case GPIO_BUTTON_UP:
+                return GPIO_BUTTON_LEFT;
+        case GPIO_BUTTON_DOWN:
+                return GPIO_BUTTON_RIGHT;
+        case GPIO_BUTTON_LEFT:
+                return GPIO_BUTTON_DOWN;
+        case GPIO_BUTTON_RIGHT:
+                return GPIO_BUTTON_UP;
+        default:
+                return GPIO_NUM_NC;
+        }
+}
+
 void read_buttons(motor_controller_handle_t *handle, button_event_t *event)
 {
         if (event->new_state == BUTTON_LONG)
                 return;
-        if (!is_motor_control_pins(event->pin))
+        if (!is_motor_control_buttons(event->pin))
                 return;
         if (event->new_state == BUTTON_UP)
         {
@@ -174,7 +200,7 @@ void read_buttons(motor_controller_handle_t *handle, button_event_t *event)
                 set_velocity(0, 0);
                 return;
         }
-        switch (event->pin)
+        switch (translate_button_pin_by_mode(event->pin, control_mode_swap_axis))
         {
         case GPIO_BUTTON_UP:
                 motor_controller_set_direction(handle, DIRECTION_FORWARD);
@@ -191,6 +217,10 @@ void read_buttons(motor_controller_handle_t *handle, button_event_t *event)
         case GPIO_BUTTON_RIGHT:
                 motor_controller_set_direction(handle, DIRECTION_TURN_RIGHT);
                 set_velocity(speed_reference / 2, speed_reference / 2);
+                break;
+        case GPIO_BUTTON_TOGGLE_CONTROL:
+                control_mode_swap_axis = !control_mode_swap_axis;
+                LOG_INFO("Goalkeeper Motor Mode is %s.", control_mode_swap_axis ? "Enabled" : "Disabled");
                 break;
         default:
                 ESP_LOGW(TAG, "button id %d is undefined", event->pin);
@@ -234,16 +264,24 @@ void update_motors(motor_controller_handle_t *handle)
                 dc_motor_set_duty(handle->right_motor_handle, motor_stat.right_motor.duty_cycle);
                 break;
         default:
-                dc_motor_coast(handle->left_motor_handle);
-                dc_motor_coast(handle->right_motor_handle);
+                if (MOTOR_BRAKE_ON_IDLE)
+                {
+                        dc_motor_brake(handle->left_motor_handle);
+                        dc_motor_brake(handle->right_motor_handle);
+                }
+                else
+                {
+                        dc_motor_coast(handle->left_motor_handle);
+                        dc_motor_coast(handle->right_motor_handle);
+                }
                 break;
         }
 }
 
 void motor_controller_openloop(motor_controller_handle_t *handle, button_event_t *event)
 {
-        motor_stat.left_motor.duty_cycle = 50;
-        motor_stat.right_motor.duty_cycle = 50;
+        motor_stat.left_motor.duty_cycle = LEFT_MOTOR_POWER;
+        motor_stat.right_motor.duty_cycle = RIGHT_MOTOR_POWER;
         update_motors(handle);
         read_buttons(handle, event);
 }

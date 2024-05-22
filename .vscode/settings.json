@@ -1,6 +1,10 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
+<<<<<<< HEAD
   "idf.portWin": "COM5",
+=======
+  "idf.portWin": "COM14",
+>>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
   "idf.adapterTargetName": "esp32s3",
   "idf.openOcdConfigs": [
     "interface/ftdi/esp32_devkitj_v1.cfg",
@@ -48,19 +52,38 @@
     "connection.h": "c",
     "bitset": "c",
     "ws2812.h": "c",
+<<<<<<< HEAD
     "mathop.h": "c",
     "servo.h": "c",
     "button.h": "c",
     "logging.h": "c"
+=======
+    "nvs_flash.h": "c",
+    "logging.h": "c",
+    "esp_now.h": "c",
+    "device_settings.h": "c",
+    "goalkeeper_controller.h": "c",
+    "musical_frequencies.h": "c",
+    "*.tcc": "c",
+    "chrono": "c",
+    "algorithm": "c",
+    "istream": "c",
+    "limits": "c",
+    "numeric": "c",
+    "info_advanced.h": "c"
+>>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
   },
   "idf.port": "/dev/ttyACM0",
   "cSpell.words": [
     "ANYEDGE",
+    "closeloop",
     "cmpr",
     "containerof",
     "deadtime",
+    "eeprom",
     "ESPNOW",
     "Espressif",
+    "FUNDUINO",
     "gpio",
     "hpoint",
     "ifidx",
@@ -80,19 +103,23 @@
     "Lspd",
     "MACSTR",
     "mcpwm",
+    "milliwatts",
     "MOTORL",
     "MOTORR",
     "netif",
+    "OLED",
     "openloop",
     "pcnt",
     "pinmask",
+    "pinouts",
     "Racc",
     "rampup",
     "ringbuffer",
     "Rpwm",
     "Rspd",
     "rssi",
-    "setpoint"
+    "setpoint",
+    "USPB"
   ],
   "cmake.configureOnOpen": false,
   "C_Cpp.errorSquiggles": "disabled"

@@ -9,9 +9,9 @@ laser_handle_t *laser_default_config(laser_handle_t *handle)
         handle->timer = LEDC_TIMER_1;
         handle->channel = LEDC_CHANNEL_4;
         handle->pin = 0;
-        handle->duty_resolution = LEDC_TIMER_14_BIT; // 14bit is what we can have at most
-        handle->freq_hz = 1000.0F;      
-        handle->duty_max = (1UL << handle->duty_resolution) - 1;              
+        handle->duty_resolution = LEDC_TIMER_10_BIT;
+        handle->freq_hz = 10000.0F;
+        handle->duty_max = (1UL << handle->duty_resolution) - 1;
         return handle;
 }
 
@@ -50,20 +50,19 @@ laser_handle_t *laser_init(laser_handle_t *handle, ledc_timer_t timer, ledc_chan
             .channel = handle->channel,
             .intr_type = LEDC_INTR_DISABLE,
             .timer_sel = handle->timer,
-            .duty = 0,         // output low on duty
-            .hpoint = 0,                        // output high on 0
+            .duty = 0,   // output low on duty
+            .hpoint = 0, // output high on 0
         };
         ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 
         return handle;
 }
 
-
 void laser_set_duty_cycle(laser_handle_t *handle, float duty_cycle)
 {
         uint32_t new_duty = duty_cycle * handle->duty_max / 100.0f;
-        //ESP_LOGV(TAG, "duty: %lu", new_duty);
-        // Set duty
+        // ESP_LOGV(TAG, "duty: %lu", new_duty);
+        //  Set duty
         ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, handle->channel, new_duty));
         // Update duty to apply the new value
         ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, handle->channel));

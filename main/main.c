@@ -18,39 +18,22 @@
 #include "rssi.h"
 #include "logging.h"
 #include "mathop.h"
+#include "eeprom.h"
+#include "device_settings.h"
+#include "power.h"
+#include "musical_frequencies.h"
+#include "tone_player.h"
 
 static const char __attribute__((unused)) *TAG = "app_main";
 
 static espnow_send_param_t espnow_send_param;
 static esp_connection_handle_t esp_connection_handle;
 static motor_controller_handle_t motor_controller_handle;
-
-void keep_power(void)
-{
-        gpio_set_level(GPIO_WAKE, 1);
-}
-
-void kill_power(void)
-{
-        gpio_set_level(GPIO_WAKE, 0);
-}
-
-void config_wake_gpio(void)
-{
-        gpio_config_t wake_io_conf = {
-            .pin_bit_mask = 1 << GPIO_WAKE,
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        ESP_ERROR_CHECK(gpio_config(&wake_io_conf));
-        keep_power();
-}
+static device_settings_t device_settings;
 
 void rssi_task()
 {
-        ws2812_hsv_t hsv = {.h = 350, .s = 75, .v = 0};
+        ws2812_hsv_t hsv = {.h = RGB_LED_HUE, .s = RGB_LED_SATURATION, .v = 0};
         ws2812_handle_t ws2812_handle;
         ws2812_default_config(&ws2812_handle);
         ws2812_init(&ws2812_handle);
@@ -67,11 +50,11 @@ void rssi_task()
                         // print_rssi_event(&rssi_event);
                         esp_connection_update_rssi(&esp_connection_handle, &rssi_event);
 
-                        const int rssi_min = -20;
+                        const int rssi_min = MIN_RSSI_TO_INITIATE_CONNECTION;
                         if (rssi_event.rssi > rssi_min)
                         {
                                 countdown = 100;
-                                float led_volume = map(rssi_event.rssi, 0, rssi_min, 50, 0);
+                                float led_volume = map(rssi_event.rssi, rssi_min, 0, 0, 50);
                                 led_volume = constrain(led_volume, 0, 100);
                                 hsv.v = led_volume;
                                 ws2812_set_hsv(&ws2812_handle, &hsv);
@@ -84,7 +67,7 @@ void rssi_task()
                 else
                 {
                         if (esp_connection_handle.remote_connected)
-                                hsv.v = 3 * esp_connection_handle.remote_connected;
+                                hsv.v = RGB_LED_VALUE * esp_connection_handle.remote_connected;
                         else
                                 hsv.v = 0;
                         ws2812_set_hsv(&ws2812_handle, &hsv);
@@ -99,12 +82,51 @@ void info_task()
         for (;;)
         {
                 // motor_controller_print_stat();
-                if (esp_connection_handle.remote_connected)
+                if (esp_connection_handle.remote_connected && DEBUG_TRANSMIT_PID_STATUS_TO_REMOTE)
                 {
-                        motor_group_stat_pkt_t *stat = motor_controller_get_stat();
-                        espnow_send_data(&espnow_send_param, ESPNOW_PARAM_TYPE_MOTOR_STAT, stat, sizeof(motor_group_stat_pkt_t)); // DEBUG ONLY
+                        // esp_connection_disable_broadcast(&esp_connection_handle);
+                        __unused motor_group_stat_pkt_t *stat = motor_controller_get_stat();
+                        espnow_send_data(&espnow_send_param, ESPNOW_PACKET_TYPE_MOTOR_STAT, stat, sizeof(motor_group_stat_pkt_t)); // DEBUG ONLY
                 }
                 vTaskDelay(pdMS_TO_TICKS(100));
+        }
+}
+
+// #include "music/castle.h"
+// #include "music/twinkle.h"
+#include "music/badapple.h"
+void music_tone_task()
+{
+        static tone_player_handle_t tone_player_handle_main, tone_player_handle_sub;
+        static tone_t *tone_main = NULL, *prev_tone_main = NULL;
+        static tone_t *tone_sub = NULL, *prev_tone_sub = NULL;
+        tone_player_load_data(&tone_player_handle_main, tones_main, sizeof(tones_main) / sizeof(*tones_main));
+        tone_player_load_data(&tone_player_handle_sub, tones_sub, sizeof(tones_sub) / sizeof(*tones_sub));
+        tone_player_set_idle_frequency(&tone_player_handle_main, MOTOR_PWM_FREQUENCY);
+        tone_player_set_idle_frequency(&tone_player_handle_sub, MOTOR_PWM_FREQUENCY);
+        for (;;)
+        {
+                motor_handle_t *left_motor = motor_controller_handle.left_motor_handle;
+                motor_handle_t *right_motor = motor_controller_handle.right_motor_handle;
+                tone_player_update(&tone_player_handle_main, &tone_main);
+                tone_player_update(&tone_player_handle_sub, &tone_sub);
+                if (prev_tone_main != tone_main && tone_main != NULL)
+                {
+                        uint32_t frequency = tone_main->frequency;
+                        LOG_VERBOSE("[Main] Frequency = %5lu", frequency);
+                        dc_motor_set_frequency(left_motor, frequency);
+                        if (tone_player_handle_sub.size == 0)
+                                dc_motor_set_frequency(right_motor, frequency);
+                        prev_tone_main = tone_main;
+                }
+                if (prev_tone_sub != tone_sub && tone_sub != NULL)
+                {
+                        uint32_t frequency = tone_sub->frequency;
+                        LOG_VERBOSE("[Sub ] Frequency = %5lu", frequency);
+                        dc_motor_set_frequency(right_motor, frequency);
+                        prev_tone_sub = tone_sub;
+                }
+                vTaskDelay(1);
         }
 }
 
@@ -117,16 +139,19 @@ void ping_task()
         }
 }
 
-#define TIME_BEFORE_RESET (10)
-
 void power_switch_task()
 {
-        int32_t elapsed_time = 0;
+        static int64_t time_us = 0;
         for (;;)
         {
-                (esp_connection_handle.remote_connected) ? elapsed_time = 0 : elapsed_time++;
-                (elapsed_time >= TIME_BEFORE_RESET) ? kill_power() : keep_power();
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                if (esp_connection_handle.remote_connected)
+                        time_us = esp_timer_get_time();
+                int64_t duration = esp_timer_get_time() - time_us;
+                (duration >= constrain(IDLE_SHUTDOWN_SECONDS, 10, 100) * ONE_SECOND_IN_US) ? kill_power() : keep_power();
+
+                if (SHOW_CONNECTION_STATUS)
+                        esp_connection_show_entries(&esp_connection_handle);
+                vTaskDelay(pdMS_TO_TICKS(3000));
         }
 }
 
@@ -135,38 +160,58 @@ void app_main(void)
         config_wake_gpio();
 
         // Initialize NVS
-        esp_err_t ret = nvs_flash_init();
-        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+        esp_err_t err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
         {
+                LOG_WARNING("Resetting EEPROM data!");
+                // NVS partition was truncated and needs to be erased
+                // Retry nvs_flash_init
                 ESP_ERROR_CHECK(nvs_flash_erase());
-                ret = nvs_flash_init();
+                err = nvs_flash_init();
         }
-        ESP_ERROR_CHECK(ret);
+        ESP_ERROR_CHECK(err);
 
-        espnow_config_t espnow_config;
+        device_settings_init(&device_settings);
+
+        espnow_wifi_config_t espnow_config;
         espnow_wifi_default_config(&espnow_config);
         espnow_wifi_init(&espnow_config);
-        espnow_default_send_param(&espnow_send_param);
+        espnow_get_default_send_param(&espnow_send_param);
         esp_connection_handle_init(&esp_connection_handle);
+        // LOG_ERROR("&device_settings = %p", &device_settings);
+        esp_connection_handle_connect_to_device_settings(&esp_connection_handle, &device_settings);
         esp_connection_set_peer_limit(&esp_connection_handle, 2);
         QueueHandle_t espnow_event_queue = espnow_init(&espnow_config, &esp_connection_handle);
+        esp_connection_enable_broadcast(&esp_connection_handle);
 
-        ret = espnow_send_text(&espnow_send_param, "device init");
-        if (ret != ESP_OK)
+        esp_connection_mac_add_to_entry(&esp_connection_handle, device_settings.remote_conn_mac);
+        espnow_get_default_send_param(&espnow_send_param);
+
+        err = espnow_send_text(&espnow_send_param, "device init");
+        if (err != ESP_OK)
         {
-                LOG_ERROR("ESP_NOW send error, quitting");
+                ESP_ERROR_CHECK_WITHOUT_ABORT(err);
                 espnow_deinit(&espnow_send_param);
-                ESP_ERROR_CHECK(ret);
                 vTaskDelete(NULL);
         }
 
         motor_controller_default_config(&motor_controller_handle);
         motor_controller_init(&motor_controller_handle);
-        motor_controller_set_mcpwm_enable(&motor_controller_handle);
+        dc_motor_set_frequency(motor_controller_handle.left_motor_handle, MOTOR_PWM_FREQUENCY);
+        dc_motor_set_frequency(motor_controller_handle.right_motor_handle, MOTOR_PWM_FREQUENCY);
+        motor_controller_clear_mcpwm_enable(&motor_controller_handle);
 
+#if (HAS_GOALKEEPER_MODULE == true)
+        goalkeeper_controller_handle_t goalkeeper_controller_handle;
+        goalkeeper_controller_default_config(&goalkeeper_controller_handle);
+        goalkeeper_controller_init(&goalkeeper_controller_handle);
+#endif
+
+#if (HAS_CATAPULT_MODULE == true)
         catapult_controller_handle_t catapult_controller_handle;
         catapult_controller_default_config(&catapult_controller_handle);
         catapult_controller_init(&catapult_controller_handle);
+#endif
 
         goalkeeper_controller_handle_t goalkeeper_controller_handle;
         goalkeeper_controller_default_config(&goalkeeper_controller_handle);
@@ -176,7 +221,13 @@ void app_main(void)
         xTaskCreate(ping_task, "ping_task", 4096, NULL, 4, NULL);
         xTaskCreate(info_task, "info_task", 4096, NULL, 4, NULL);
         xTaskCreate(power_switch_task, "power_switch_task", 4096, NULL, 4, NULL);
+
+#if (ENABLE_MUSIC_PLAYER == true)
+        xTaskCreate(music_tone_task, "music_tone_task", 4096, NULL, 4, NULL);
+#endif
+
         motor_controller_stop_all(&motor_controller_handle);
+        esp_connection_set_unique_peer_mac(&esp_connection_handle, device_settings.remote_conn_mac);
 
         while (true)
         {
@@ -186,7 +237,7 @@ void app_main(void)
                 espnow_event_t espnow_evt;
                 while (xQueueReceive(espnow_event_queue, &espnow_evt, 0))
                 {
-                        espnow_data_t *recv_data = NULL;
+                        espnow_packet_t *recv_data = NULL;
                         switch (espnow_evt.id)
                         {
                         case ESPNOW_SEND_CB:
@@ -210,9 +261,11 @@ void app_main(void)
                                         break;
                                 }
 
-                                esp_peer_t *peer = esp_connection_mac_add_to_entry(&esp_connection_handle, recv_cb->mac_addr);
+                                esp_peer_handle_t *peer = esp_connection_mac_add_to_entry(&esp_connection_handle, recv_cb->mac_addr);
                                 espnow_get_send_param(&espnow_send_param, peer);
                                 esp_peer_process_received(peer, recv_data);
+
+                                LOG_VERBOSE("peer " MACSTR " is %s", MAC2STR(recv_cb->mac_addr), recv_data->broadcast ? "BROADCAST" : "UNICAST");
 
                                 if (recv_data->broadcast == ESPNOW_DATA_UNICAST)
                                 {
@@ -220,6 +273,9 @@ void app_main(void)
                                                 memcpy(&remote_button_event, recv_data->payload, recv_data->len);
                                         // print_mem(recv_data->payload, recv_data->len);
                                 }
+
+                                // if (recv_data->type != ESPNOW_PACKET_TYPE_ACK)
+                                // espnow_send_reply(&espnow_send_param);
 
                                 free(recv_cb->data);
 
@@ -232,14 +288,29 @@ void app_main(void)
 
                 if (esp_connection_handle.remote_connected == 0)
                 {
+                        motor_controller_clear_mcpwm_enable(&motor_controller_handle);
                         motor_controller_stop_all(&motor_controller_handle);
                 }
                 else
                 {
-                        motor_controller(&motor_controller_handle, &remote_button_event);
-                        // motor_controller_openloop(&motor_controller_handle, &remote_button_event);
+                        motor_controller_set_mcpwm_enable(&motor_controller_handle);
+#if (CAR_USE_PID_CONTROL == true)
+                        motor_controller_closeloop(&motor_controller_handle, &remote_button_event);
+#else
+                        motor_controller_openloop(&motor_controller_handle, &remote_button_event);
+#endif
+
+#if (HAS_GOALKEEPER_MODULE == true)
+                        goalkeeper_controller(&goalkeeper_controller_handle, &remote_button_event);
+#endif
+
+#if (HAS_CATAPULT_MODULE == true)
                         catapult_controller(&catapult_controller_handle, &remote_button_event);
+<<<<<<< HEAD
                         // goalkeeper_controller(&goalkeeper_controller_handle, &remote_button_event);
+=======
+#endif
+>>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
                 }
                 esp_connection_handle_update(&esp_connection_handle);
                 heap_caps_check_integrity_all(true);

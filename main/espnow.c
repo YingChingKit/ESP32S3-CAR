@@ -7,9 +7,9 @@ QueueHandle_t espnow_queue;
 static const uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint16_t espnow_seq[2] = {0, 0}; // [0] for Tx, [1] for Rx
 static esp_connection_handle_t *esp_connection_handle;
-static espnow_config_t *espnow_config;
+static espnow_wifi_config_t *espnow_config;
 
-espnow_config_t *espnow_wifi_default_config(espnow_config_t *config)
+espnow_wifi_config_t *espnow_wifi_default_config(espnow_wifi_config_t *config)
 {
         if (config == NULL)
         {
@@ -30,7 +30,7 @@ espnow_config_t *espnow_wifi_default_config(espnow_config_t *config)
         return config;
 }
 
-espnow_send_param_t *espnow_default_send_param(espnow_send_param_t *send_param)
+espnow_send_param_t *espnow_get_default_send_param(espnow_send_param_t *send_param)
 {
         if (send_param == NULL)
         {
@@ -44,7 +44,7 @@ espnow_send_param_t *espnow_default_send_param(espnow_send_param_t *send_param)
 }
 
 /* WiFi should start before using ESPNOW */
-void espnow_wifi_init(espnow_config_t *espnow_config)
+void espnow_wifi_init(espnow_wifi_config_t *espnow_config)
 {
         if (espnow_config == NULL)
         {
@@ -149,7 +149,7 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
 }
 
 /* Parse received ESPNOW data. */
-espnow_data_t *espnow_data_parse(espnow_data_t *recv_data, espnow_event_recv_cb_t *recv_cb)
+espnow_packet_t *espnow_data_parse(espnow_packet_t *recv_data, espnow_event_recv_cb_t *recv_cb)
 {
         if (recv_cb == NULL)
         {
@@ -157,7 +157,7 @@ espnow_data_t *espnow_data_parse(espnow_data_t *recv_data, espnow_event_recv_cb_
                 return NULL;
         }
 
-        size_t recv_data_min_len = sizeof(espnow_data_t);
+        size_t recv_data_min_len = sizeof(espnow_packet_t);
         if (recv_cb->data_len < recv_data_min_len)
         {
                 LOG_WARNING("Received ESP-NOW data too short, len:%d<min:%d", recv_cb->data_len, recv_data_min_len);
@@ -166,7 +166,7 @@ espnow_data_t *espnow_data_parse(espnow_data_t *recv_data, espnow_event_recv_cb_
 
         // if (recv_cb->data) print_mem(recv_cb->data, recv_cb->data_len);
 
-        recv_data = (espnow_data_t *)recv_cb->data;
+        recv_data = (espnow_packet_t *)recv_cb->data;
         if (recv_data == NULL)
         {
                 LOG_ERROR("NULL pointer, recv_data=0x%X", (uintptr_t)recv_data);
@@ -203,7 +203,7 @@ espnow_send_param_t *espnow_payload_create(espnow_send_param_t *send_param, void
                 return NULL;
         }
 
-        send_param->len = sizeof(espnow_data_t) + len;
+        send_param->len = sizeof(espnow_packet_t) + len;
         send_param->buffer = malloc(send_param->len);
         if (send_param->buffer == NULL)
         {
@@ -211,7 +211,7 @@ espnow_send_param_t *espnow_payload_create(espnow_send_param_t *send_param, void
                 return NULL;
         }
 
-        espnow_data_t *packet = (espnow_data_t *)send_param->buffer;
+        espnow_packet_t *packet = (espnow_packet_t *)send_param->buffer;
         if (packet == NULL)
         {
                 LOG_ERROR("NULL pointer, packet=0x%X", (uintptr_t)packet);
@@ -248,15 +248,20 @@ espnow_send_param_t *espnow_payload_cleanup(espnow_send_param_t *send_param)
         return send_param;
 }
 
-esp_err_t espnow_send_data(espnow_send_param_t *send_param, espnow_param_type_t type, void *data, size_t len)
+esp_err_t espnow_send_data(espnow_send_param_t *send_param, espnow_packet_type_t type, void *data, size_t len)
 {
+        esp_err_t err;
         if (send_param == NULL)
         {
                 LOG_WARNING("NULL pointer, send_param=0x%X", (uintptr_t)send_param);
                 return ESP_ERR_INVALID_ARG;
         }
 
-        esp_peer_t *peer = esp_connection_mac_lookup(esp_connection_handle, send_param->dest_mac);
+        esp_peer_handle_t *peer = esp_connection_mac_lookup(esp_connection_handle, send_param->dest_mac);
+
+        if (esp_connection_count_unique_peer(esp_connection_handle) > 0 && !peer->is_unique)
+                return ESP_OK;
+
         if (peer == NULL)
         {
                 send_param->seq_num = espnow_seq[ESPNOW_PARAM_SEQ_TX]++;
@@ -270,13 +275,28 @@ esp_err_t espnow_send_data(espnow_send_param_t *send_param, espnow_param_type_t 
         esp_err_t ret;
         send_param->type = type;
         espnow_payload_create(send_param, data, len);
-        espnow_data_t *packet = (espnow_data_t *)send_param->buffer;
+        espnow_packet_t *packet = (espnow_packet_t *)send_param->buffer;
         if (packet == NULL)
         {
                 LOG_WARNING("NULL pointer, packet=0x%X", (uintptr_t)packet);
                 return ESP_ERR_INVALID_STATE;
         }
-        LOG_VERBOSE("Send %s to " MACSTR " , seq:%d, len:%d", ESPNOW_PARAM_TYPE_STRING[send_param->type], MAC2STR(send_param->dest_mac), packet->seq_num, packet->len);
+
+        if (peer->registered == false)
+        {
+                esp_now_peer_info_t peer_info = {
+                    .channel = espnow_config->channel,
+                    .encrypt = false,
+                    .ifidx = espnow_config->esp_interface,
+                };
+                memcpy(peer_info.peer_addr, peer->mac, ESP_NOW_ETH_ALEN);
+                err = esp_now_add_peer(&peer_info);
+                if (err != ESP_OK && err != ESP_ERR_ESPNOW_EXIST)
+                        ESP_ERROR_CHECK(err);
+                peer->registered = true;
+        }
+
+        LOG_VERBOSE("Send %s to " MACSTR " , seq:%d, len:%d", ESPNOW_PACKET_TYPE_STRING[send_param->type], MAC2STR(send_param->dest_mac), packet->seq_num, packet->len);
         ret = esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len);
         espnow_payload_cleanup(send_param);
         return ret;
@@ -284,15 +304,16 @@ esp_err_t espnow_send_data(espnow_send_param_t *send_param, espnow_param_type_t 
 
 esp_err_t espnow_send_text(espnow_send_param_t *send_param, char *text)
 {
-        return espnow_send_data(send_param, ESPNOW_PARAM_TYPE_TEXT, text, strlen(text));
+        return espnow_send_data(send_param, ESPNOW_PACKET_TYPE_TEXT, text, strlen(text));
 }
 
-esp_err_t espnow_reply(espnow_send_param_t *send_param)
+esp_err_t espnow_send_reply(espnow_send_param_t *send_param)
 {
-        return espnow_send_data(send_param, ESPNOW_PARAM_TYPE_ACK, 0, 0);
+        return ESP_OK;
+        // return espnow_send_data(send_param, ESPNOW_PACKET_TYPE_ACK, 0, 0);
 }
 
-QueueHandle_t espnow_init(espnow_config_t *espnow_config, esp_connection_handle_t *conn_handle)
+QueueHandle_t espnow_init(espnow_wifi_config_t *espnow_config, esp_connection_handle_t *conn_handle)
 {
         if ((espnow_config == NULL) || (conn_handle == NULL))
         {
@@ -320,15 +341,15 @@ QueueHandle_t espnow_init(espnow_config_t *espnow_config, esp_connection_handle_
         ESP_ERROR_CHECK(esp_now_set_pmk((uint8_t *)espnow_config->pmk));
 
         /* Add broadcast peer information to peer list. */
-        esp_now_peer_info_t peer = {
+        esp_now_peer_info_t peer_info = {
             .channel = espnow_config->channel,
             .encrypt = false,
             .ifidx = espnow_config->esp_interface,
         };
-        memcpy(peer.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
-        ESP_ERROR_CHECK(esp_now_add_peer(&peer));
-        esp_connection_mac_add_to_entry(esp_connection_handle, peer.peer_addr);
-
+        memcpy(peer_info.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
+        ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
+        esp_peer_handle_t *peer = esp_connection_mac_add_to_entry(esp_connection_handle, peer_info.peer_addr);
+        peer->registered = true;
         return espnow_queue;
 }
 
@@ -357,7 +378,7 @@ espnow_send_param_t *espnow_get_send_param_unicast(espnow_send_param_t *send_par
         return send_param;
 }
 
-espnow_send_param_t *espnow_get_send_param(espnow_send_param_t *send_param, esp_peer_t *peer)
+espnow_send_param_t *espnow_get_send_param(espnow_send_param_t *send_param, esp_peer_handle_t *peer)
 {
         if (send_param == NULL)
         {
@@ -366,9 +387,11 @@ espnow_send_param_t *espnow_get_send_param(espnow_send_param_t *send_param, esp_
         }
 
         if (peer == NULL)
-                return espnow_default_send_param(send_param);
-        if (peer->status != ESP_PEER_STATUS_CONNECTED)
+                return espnow_get_default_send_param(send_param);
+
+        if (memcmp(peer->mac, broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
                 return espnow_get_send_param_broadcast(send_param);
+
         return espnow_get_send_param_unicast(send_param, peer->mac);
 }
 
@@ -383,12 +406,22 @@ void esp_connection_handle_init(esp_connection_handle_t *handle)
         handle->size = 0;
         handle->limit = -1;
         handle->remote_connected = false;
-        handle->entries = malloc(sizeof(esp_peer_t));
+        handle->entries = malloc(sizeof(esp_peer_handle_t));
         if (handle->entries == NULL)
         {
                 LOG_ERROR("malloc failed, cannot create node entries");
                 return;
         }
+}
+
+void esp_connection_handle_connect_to_device_settings(esp_connection_handle_t *handle, device_settings_t *device_settings)
+{
+        if ((handle == NULL) || device_settings == NULL)
+        {
+                LOG_ERROR("NULL pointer, handle=0x%X, device_settings=0x%X", (uintptr_t)handle, (uintptr_t)device_settings);
+                return;
+        }
+        handle->device_settings = device_settings;
 }
 
 void esp_connection_handle_clear(esp_connection_handle_t *handle)
@@ -414,15 +447,20 @@ void esp_connection_handle_update(esp_connection_handle_t *handle)
                 return;
         }
 
+        bool have_unique_peer = esp_connection_count_unique_peer(handle);
+        if (have_unique_peer)
+                esp_connection_purge_non_unique_peers(handle);
+
         for (size_t i = 0; i < handle->size; i++)
         {
-                esp_peer_t *peer = handle->entries + i;
+                esp_peer_handle_t *peer = handle->entries + i;
                 if (peer == NULL)
                 {
                         LOG_ERROR("NULL pointer, peer=0x%X, index=%d", (uintptr_t)peer, i);
-                        return;
+                        continue;
                 }
 
+                espnow_send_param_t send_param;
                 switch (peer->status)
                 {
                 case ESP_PEER_STATUS_UNKNOWN:
@@ -430,13 +468,29 @@ void esp_connection_handle_update(esp_connection_handle_t *handle)
                 case ESP_PEER_STATUS_NOREPLY:
                 case ESP_PEER_STATUS_IN_RANGE:
                         if (esp_timer_get_time() - peer->lastseen_broadcast_us > ONE_SECOND_IN_US)
-                                esp_peer_set_status(peer, ESP_PEER_STATUS_LOST);
+                                if (esp_timer_get_time() - peer->lastseen_unicast_us > ONE_SECOND_IN_US)
+                                        esp_peer_set_status(peer, ESP_PEER_STATUS_LOST);
                         break;
                 case ESP_PEER_STATUS_CONNECTED:
+                        if (!peer->saved_to_rom)
+                        {
+                                device_settings_set_mac(handle->device_settings, peer->mac);
+                                esp_connection_set_unique_peer_mac(handle, peer->mac);
+                                peer->saved_to_rom = true;
+                        }
                         if (esp_timer_get_time() - peer->lastseen_unicast_us > ONE_SECOND_IN_US)
                                 esp_peer_set_status(peer, ESP_PEER_STATUS_LOST);
                         break;
                 case ESP_PEER_STATUS_CONNECTING:
+                        if (esp_timer_get_time() - peer->last_ping_us > 3 * 1e5)
+                        {
+                                peer->last_ping_us = esp_timer_get_time();
+                                espnow_get_default_send_param(&send_param);
+                                espnow_get_send_param_unicast(&send_param, peer->mac);
+                                peer->lastseen_unicast_us = esp_timer_get_time();
+                                espnow_send_data(&send_param, ESPNOW_PACKET_TYPE_CONNECT, NULL, 0);
+                        }
+
                         if (esp_timer_get_time() - peer->connect_time_us > ONE_SECOND_IN_US)
                                 esp_peer_set_status(peer, ESP_PEER_STATUS_NOREPLY);
                         break;
@@ -448,15 +502,16 @@ void esp_connection_handle_update(esp_connection_handle_t *handle)
                         }
                         peer->connect_time_us = esp_timer_get_time();
                         peer->lastseen_unicast_us = esp_timer_get_time();
-                        espnow_send_param_t send_param;
-                        espnow_default_send_param(&send_param);
+                        espnow_get_default_send_param(&send_param);
                         espnow_get_send_param_unicast(&send_param, peer->mac);
-                        espnow_send_data(&send_param, ESP_PEER_PACKET_CONNECT, NULL, 0);
+                        espnow_send_data(&send_param, ESPNOW_PACKET_TYPE_CONNECT, NULL, 0);
                         esp_peer_set_status(peer, ESP_PEER_STATUS_CONNECTING);
                         break;
-                case ESP_PEER_STATUS_REJECTED:
                 case ESP_PEER_STATUS_LOST:
+                case ESP_PEER_STATUS_REJECTED:
                 case ESP_PEER_STATUS_MAX:
+                        if (peer->is_unique)
+                                esp_peer_set_status(peer, ESP_PEER_STATUS_AVAILABLE);
                         break;
                 }
         }
@@ -465,16 +520,16 @@ void esp_connection_handle_update(esp_connection_handle_t *handle)
 
 void esp_connection_update_rssi(esp_connection_handle_t *handle, const rssi_event_t *rssi_event)
 {
-        if ((handle == NULL) || (handle->entries == NULL) || (rssi_event) == NULL)
+        if ((handle == NULL) || (handle->entries == NULL) || (rssi_event == NULL))
         {
                 LOG_ERROR("NULL pointer, handle=0x%X, handle->entries=0x%X, rssi_event=0x%X", (uintptr_t)handle, (uintptr_t)handle->entries, (uintptr_t)rssi_event);
                 return;
         }
 
-        esp_peer_t *peer = esp_connection_mac_add_to_entry(handle, rssi_event->recv_mac);
+        esp_peer_handle_t *peer = esp_connection_mac_add_to_entry(handle, rssi_event->recv_mac);
         peer->rssi = rssi_event->rssi;
 
-        const int rssi_min = -20;
+        const int rssi_min = MIN_RSSI_TO_INITIATE_CONNECTION;
         if (rssi_event->rssi > rssi_min)
         {
                 if (peer->status == ESP_PEER_STATUS_CONNECTED)
@@ -499,6 +554,9 @@ void esp_connection_update_rssi(esp_connection_handle_t *handle, const rssi_even
                         }
                 }
         }
+
+        if (peer != NULL && peer->is_unique && peer->status == ESP_PEER_STATUS_IN_RANGE)
+                esp_peer_set_status(peer, ESP_PEER_STATUS_AVAILABLE);
 }
 
 bool esp_mac_check_equals(const uint8_t *mac1, const uint8_t *mac2)
@@ -526,7 +584,7 @@ size_t esp_connection_count_connected(esp_connection_handle_t *handle)
         size_t count = 0;
         for (size_t i = 0; i < handle->size; i++)
         {
-                esp_peer_t *peer = handle->entries + i;
+                esp_peer_handle_t *peer = handle->entries + i;
                 if (peer == NULL)
                 {
                         LOG_ERROR("NULL pointer, peer=0x%X, index=%d", (uintptr_t)peer, i);
@@ -539,7 +597,31 @@ size_t esp_connection_count_connected(esp_connection_handle_t *handle)
         return count;
 }
 
-esp_peer_t *esp_connection_mac_lookup(esp_connection_handle_t *handle, const uint8_t *mac)
+size_t esp_connection_count_unique_peer(esp_connection_handle_t *handle)
+{
+        if ((handle == NULL) || (handle->entries == NULL))
+        {
+                LOG_ERROR("NULL pointer, handle=0x%X, handle->entries=0x%X", (uintptr_t)handle, (uintptr_t)handle->entries);
+                return 0;
+        }
+
+        size_t count = 0;
+        for (size_t i = 0; i < handle->size; i++)
+        {
+                esp_peer_handle_t *peer = handle->entries + i;
+                if (peer == NULL)
+                {
+                        LOG_ERROR("NULL pointer, peer=0x%X, index=%d", (uintptr_t)peer, i);
+                        return 0;
+                }
+
+                if (peer->is_unique)
+                        count++;
+        }
+        return count;
+}
+
+esp_peer_handle_t *esp_connection_mac_lookup(esp_connection_handle_t *handle, const uint8_t *mac)
 {
         if ((handle == NULL) || (handle->entries == NULL))
         {
@@ -548,7 +630,7 @@ esp_peer_t *esp_connection_mac_lookup(esp_connection_handle_t *handle, const uin
         }
         for (size_t i = 0; i < handle->size; i++)
         {
-                esp_peer_t *peer = handle->entries + i;
+                esp_peer_handle_t *peer = handle->entries + i;
                 if (peer == NULL)
                 {
                         LOG_ERROR("NULL pointer, peer=0x%X, index=%d", (uintptr_t)peer, i);
@@ -561,13 +643,14 @@ esp_peer_t *esp_connection_mac_lookup(esp_connection_handle_t *handle, const uin
         return NULL;
 }
 
-void esp_connection_peer_init(esp_peer_t *peer, const uint8_t *mac)
+void esp_connection_peer_init(esp_peer_handle_t *peer, const uint8_t *mac)
 {
         if (peer == NULL)
         {
                 LOG_ERROR("NULL pointer, peer=0x%X", (uintptr_t)peer);
                 return;
         }
+        memset(peer, 0, sizeof(esp_peer_handle_t));
         memcpy(peer->mac, mac, ESP_NOW_ETH_ALEN);
         peer->conn_retry = 0;
         peer->lastseen_broadcast_us = esp_timer_get_time();
@@ -577,9 +660,11 @@ void esp_connection_peer_init(esp_peer_t *peer, const uint8_t *mac)
         peer->rssi = -200;
         peer->status = ESP_PEER_STATUS_UNKNOWN;
         peer->registered = false;
+        peer->is_unique = false;
+        peer->saved_to_rom = false;
 }
 
-esp_peer_t *esp_connection_mac_add_to_entry(esp_connection_handle_t *handle, const uint8_t *mac)
+esp_peer_handle_t *esp_connection_mac_add_to_entry(esp_connection_handle_t *handle, const uint8_t *mac)
 {
         if ((handle == NULL) || (handle->entries == NULL))
         {
@@ -587,16 +672,16 @@ esp_peer_t *esp_connection_mac_add_to_entry(esp_connection_handle_t *handle, con
                 return NULL;
         }
 
-        esp_peer_t *peer = esp_connection_mac_lookup(handle, mac);
+        esp_peer_handle_t *peer = esp_connection_mac_lookup(handle, mac);
         if (peer != NULL)
         {
                 LOG_VERBOSE("Peer " MACSTR " already logged", MAC2STR(mac));
-                // print_mem(peer, sizeof(esp_peer_t));
+                // print_mem(peer, sizeof(esp_peer_handle_t));
                 return peer;
         }
 
         size_t new_capacity = handle->size + 1;
-        esp_peer_t *new_addr = realloc(handle->entries, sizeof(esp_peer_t) * new_capacity);
+        esp_peer_handle_t *new_addr = realloc(handle->entries, sizeof(esp_peer_handle_t) * new_capacity);
         if (new_addr == NULL)
         {
                 LOG_ERROR("realloc failed, cannot add peer " MACSTR "to node list", MAC2STR(mac));
@@ -604,18 +689,19 @@ esp_peer_t *esp_connection_mac_add_to_entry(esp_connection_handle_t *handle, con
         }
 
         handle->entries = new_addr;
-        esp_peer_t *new_peer = handle->entries + handle->size;
+        esp_peer_handle_t *new_peer = handle->entries + handle->size;
         if (peer != NULL)
         {
                 LOG_ERROR("NULL pointer, new_peer=0x%X", (uintptr_t)new_peer);
-                // print_mem(peer, sizeof(esp_peer_t));
+                // print_mem(peer, sizeof(esp_peer_handle_t));
                 return peer;
         }
 
         esp_connection_peer_init(new_peer, mac);
         handle->size = new_capacity;
         LOG_INFO("Added " MACSTR " to known node, total: %d", MAC2STR(mac), handle->size);
-        // print_mem(new_peer, sizeof(esp_peer_t));
+        esp_connection_show_entries(handle);
+        // print_mem(new_peer, sizeof(esp_peer_handle_t));
         return new_peer;
 }
 
@@ -630,13 +716,13 @@ void esp_connection_show_entries(esp_connection_handle_t *handle)
         LOG_INFO("Listing available ESP-NOW nodes, %d total", handle->size);
         for (size_t i = 0; i < handle->size; i++)
         {
-                esp_peer_t *peer = handle->entries + i;
+                esp_peer_handle_t *peer = handle->entries + i;
                 if (peer == NULL)
                 {
                         LOG_ERROR("NULL pointer, peer=0x%X", (uintptr_t)peer);
                         return;
                 }
-                LOG_INFO("    id: %d, addr: " MACSTR ", rssi: %4d, status: %s", i, MAC2STR(peer->mac), peer->rssi, ESP_PEER_STATUS_STRING[peer->status]);
+                LOG_INFO("    id: %d, addr: " MACSTR ", rssi: %4d, status: %s, unique: %d", i, MAC2STR(peer->mac), peer->rssi, ESP_PEER_STATUS_STRING[peer->status], peer->is_unique);
         }
         if (handle->size == 0)
         {
@@ -654,18 +740,37 @@ void esp_connection_set_peer_limit(esp_connection_handle_t *handle, int8_t new_l
         handle->limit = new_limit;
 }
 
-void esp_peer_set_status(esp_peer_t *peer, esp_peer_status_t new_status)
+void esp_connection_set_unique_peer_mac(esp_connection_handle_t *handle, const uint8_t *mac)
+{
+        if ((handle == NULL) || (handle->entries == NULL))
+        {
+                LOG_ERROR("NULL pointer, handle=0x%X, handle->entries=0x%X", (uintptr_t)handle, (uintptr_t)handle->entries);
+                return;
+        }
+        if (memcmp(mac, broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
+                return;
+
+        LOG_WARNING("Setting peer MAC " MACSTR " as unique peer", MAC2STR(mac));
+        esp_peer_handle_t *peer = esp_connection_mac_add_to_entry(handle, mac);
+        peer->is_unique = true;
+}
+
+void esp_peer_set_status(esp_peer_handle_t *peer, esp_peer_status_t new_status)
 {
         if (peer == NULL)
         {
                 LOG_ERROR("NULL pointer, peer=0x%X", (uintptr_t)peer);
                 return;
         }
+        if (new_status == ESP_PEER_STATUS_CONNECTED)
+                LOG_INFO("peer " MACSTR " connected!", MAC2STR(peer->mac));
+        if (peer->status == ESP_PEER_STATUS_CONNECTED && new_status == ESP_PEER_STATUS_LOST)
+                LOG_WARNING("peer " MACSTR " disconnected!", MAC2STR(peer->mac));
         LOG_INFO("peer " MACSTR " status [%s --> %s]", MAC2STR(peer->mac), ESP_PEER_STATUS_STRING[peer->status], ESP_PEER_STATUS_STRING[new_status]);
         peer->status = new_status;
 }
 
-void esp_peer_process_received(esp_peer_t *peer, espnow_data_t *recv_data)
+void esp_peer_process_received(esp_peer_handle_t *peer, espnow_packet_t *recv_data)
 {
         if ((peer == NULL) || (recv_data == NULL))
         {
@@ -676,7 +781,7 @@ void esp_peer_process_received(esp_peer_t *peer, espnow_data_t *recv_data)
         espnow_send_param_t send_param;
         espnow_get_send_param(&send_param, peer);
 
-        if (recv_data->type == ESPNOW_PARAM_TYPE_ACK)
+        if (recv_data->type == ESPNOW_PACKET_TYPE_ACK)
         {
                 LOG_VERBOSE("packet id:[%04d] acknowledged from peer " MACSTR, recv_data->seq_num, MAC2STR(peer->mac));
                 return;
@@ -688,7 +793,7 @@ void esp_peer_process_received(esp_peer_t *peer, espnow_data_t *recv_data)
         if (recv_data->broadcast == ESPNOW_DATA_BROADCAST)
         {
                 peer->lastseen_broadcast_us = esp_timer_get_time();
-                espnow_reply(&send_param);
+                espnow_send_reply(&send_param);
                 LOG_VERBOSE("Receive %dth broadcast data from: " MACSTR ", len: %d",
                             recv_data->seq_num,
                             MAC2STR(peer->mac),
@@ -698,7 +803,7 @@ void esp_peer_process_received(esp_peer_t *peer, espnow_data_t *recv_data)
         else if (recv_data->broadcast == ESPNOW_DATA_UNICAST)
         {
                 peer->lastseen_unicast_us = esp_timer_get_time();
-                espnow_reply(&send_param);
+                espnow_send_reply(&send_param);
                 peer->lastsent_unicast_us = esp_timer_get_time();
                 if (peer->status == ESP_PEER_STATUS_CONNECTING)
                 {
@@ -728,7 +833,7 @@ void esp_connection_send_heartbeat(esp_connection_handle_t *handle)
 
         for (size_t i = 0; i < handle->size; i++)
         {
-                esp_peer_t *peer = handle->entries + i;
+                esp_peer_handle_t *peer = handle->entries + i;
                 if (peer == NULL)
                 {
                         LOG_ERROR("NULL pointer, peer=0x%X", (uintptr_t)peer);
@@ -736,12 +841,72 @@ void esp_connection_send_heartbeat(esp_connection_handle_t *handle)
                 }
 
                 // if (peer->registered == true)
-                if (peer->status >= ESP_PEER_STATUS_CONNECTING)
+                if (peer->status >= ESP_PEER_STATUS_CONNECTING || peer->is_unique)
                 {
                         LOG_VERBOSE("Sending heartbeat to peer " MACSTR, MAC2STR(peer->mac));
                         espnow_get_send_param(&send_param, peer);
                         send_param.broadcast = ESPNOW_DATA_UNICAST;
                         espnow_send_text(&send_param, "ping");
                 }
+        }
+}
+
+void esp_connection_enable_broadcast(esp_connection_handle_t *handle)
+{
+        esp_err_t err;
+        esp_peer_handle_t *peer = esp_connection_mac_lookup(handle, broadcast_mac);
+        esp_now_peer_info_t peer_info = {
+            .channel = espnow_config->channel,
+            .encrypt = false,
+            .ifidx = espnow_config->esp_interface,
+        };
+        memcpy(peer_info.peer_addr, peer->mac, ESP_NOW_ETH_ALEN);
+        err = esp_now_add_peer(&peer_info);
+        if (err != ESP_OK && err != ESP_ERR_ESPNOW_EXIST)
+                ESP_ERROR_CHECK(err);
+        peer->registered = true;
+        peer->status = ESP_PEER_STATUS_UNKNOWN;
+}
+
+void esp_connection_disable_broadcast(esp_connection_handle_t *handle)
+{
+        LOG_WARNING("DISABLED BROADCAST MAC ADDRESS");
+        esp_err_t err;
+        esp_peer_handle_t *peer = esp_connection_mac_lookup(handle, broadcast_mac);
+        err = esp_now_del_peer(peer->mac);
+        if (err != ESP_OK && err != ESP_ERR_ESPNOW_NOT_FOUND)
+                ESP_ERROR_CHECK(err);
+        peer->registered = false;
+        peer->status = ESP_PEER_STATUS_REJECTED;
+}
+
+void esp_connection_purge_non_unique_peers(esp_connection_handle_t *handle)
+{
+        esp_err_t err;
+        if ((handle == NULL) || (handle->entries == NULL))
+        {
+                LOG_ERROR("NULL pointer, handle=0x%X, handle->entries=0x%X", (uintptr_t)handle, (uintptr_t)handle->entries);
+                return;
+        }
+
+        for (size_t i = 0; i < handle->size; i++)
+        {
+                esp_peer_handle_t *peer = handle->entries + i;
+                if (peer == NULL)
+                {
+                        LOG_ERROR("NULL pointer, peer=0x%X", (uintptr_t)peer);
+                        continue;
+                }
+                if (!esp_now_is_peer_exist(peer->mac))
+                        continue;
+
+                if (peer->is_unique)
+                        continue;
+
+                err = esp_now_del_peer(peer->mac);
+                if (err != ESP_OK && err != ESP_ERR_ESPNOW_NOT_FOUND)
+                        ESP_ERROR_CHECK(err);
+                peer->registered = false;
+                peer->status = ESP_PEER_STATUS_REJECTED;
         }
 }
