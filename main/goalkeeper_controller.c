@@ -1,4 +1,7 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad
 
 #include "goalkeeper_controller.h"
 
@@ -66,6 +69,7 @@ void goalkeeper_controller(goalkeeper_controller_handle_t *handle, button_event_
         // ESP_LOGI(TAG, "Angle = %f", handle->GK_servo_angle);
         servo_set_angle(handle->GK_servo, handle->GK_servo_angle);
 }
+<<<<<<< HEAD
 =======
 
 #include "goalkeeper_controller.h"
@@ -180,3 +184,5 @@ void goalkeeper_controller(goalkeeper_controller_handle_t *handle, button_event_
         servo_set_angle(handle->goalkeeping_servo, handle->goalkeeping_servo_angle);
 }
 >>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad

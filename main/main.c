@@ -213,10 +213,6 @@ void app_main(void)
         catapult_controller_init(&catapult_controller_handle);
 #endif
 
-        goalkeeper_controller_handle_t goalkeeper_controller_handle;
-        goalkeeper_controller_default_config(&goalkeeper_controller_handle);
-        goalkeeper_controller_init(&goalkeeper_controller_handle);
-
         xTaskCreate(rssi_task, "rssi_task", 4096, NULL, 4, NULL);
         xTaskCreate(ping_task, "ping_task", 4096, NULL, 4, NULL);
         xTaskCreate(info_task, "info_task", 4096, NULL, 4, NULL);
@@ -307,10 +303,14 @@ void app_main(void)
 #if (HAS_CATAPULT_MODULE == true)
                         catapult_controller(&catapult_controller_handle, &remote_button_event);
 <<<<<<< HEAD
+<<<<<<< HEAD
                         // goalkeeper_controller(&goalkeeper_controller_handle, &remote_button_event);
 =======
 #endif
 >>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
+=======
+#endif
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad
                 }
                 esp_connection_handle_update(&esp_connection_handle);
                 heap_caps_check_integrity_all(true);

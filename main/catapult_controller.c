@@ -1,4 +1,7 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad
 
 #include "catapult_controller.h"
 
@@ -133,6 +136,7 @@ void catapult_controller(catapult_controller_handle_t *handle, button_event_t *e
         servo_set_angle(handle->wind, handle->wind_angle);
         servo_set_angle(handle->laser, handle->laser_angle);
 }
+<<<<<<< HEAD
 =======
 
 #include "catapult_controller.h"
@@ -358,3 +362,5 @@ void catapult_controller(catapult_controller_handle_t *handle, button_event_t *e
         servo_set_angle(handle->laser, handle->laser_angle);
 }
 >>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad

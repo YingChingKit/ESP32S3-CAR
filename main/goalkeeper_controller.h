@@ -1,4 +1,7 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad
 
 #pragma once
 
@@ -30,6 +33,7 @@ typedef struct
 goalkeeper_controller_handle_t *goalkeeper_controller_default_config(goalkeeper_controller_handle_t *handle);
 void goalkeeper_controller_init(goalkeeper_controller_handle_t *handle);
 
+<<<<<<< HEAD
 =======
 
 #pragma once
@@ -85,4 +89,6 @@ goalkeeper_controller_handle_t *goalkeeper_controller_default_config(goalkeeper_
 
 // Runs the goalkeeper controller, with button event as its parameter
 >>>>>>> 0a35681be08bc44e432a35f12e7860b4b4b403ad
+=======
+>>>>>>> 380556e33821b32eb3de0b6dae661dedbe8144ad
 void goalkeeper_controller(goalkeeper_controller_handle_t *handle, button_event_t *event);
